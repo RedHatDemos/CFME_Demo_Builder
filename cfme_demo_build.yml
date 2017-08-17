@@ -1,0 +1,249 @@
+---
+- name: CloudForms 4.5 Demo Builder
+  hosts: localhost
+  connection: local
+  vars:
+    database_dump_url: "http://10.9.62.89/dumps/45/vmdb_production_latest.dump"
+    cfme_region: 10
+    # CFME admin user password
+    admin_password: "r3dh4t1!"
+    # CFME cloudops user password
+    cloudops_password: "{{ admin_password }}"
+    # CFME clouduser user password
+    clouduser_password: "{{ admin_password }}"
+    # CFME pgsql database password
+    db_password: "{{ admin_password }}"
+    # Hash used to set root user password for SSH Access (SHA256 hash).
+    root_hash: "$6$J8j7w3z2$V2SqO4YnHao3wvYto7TSTqcWncKHt.EdsBUAZQKy.889g.uf/6iI/IbPn/znPR0p9BHxc3U2TXEXtvWkvyQux1"
+    # Toggles to install various demos from https://github.com/ramrexx
+    install_infoblox_demo: false
+    # This should only be enabled CloudForms 4.5+ appliances
+    install_cloudforms_essentials: false
+    # This should only be enabled for pre CloudForms 4.5 appliances
+    install_cloudforms_poc: false
+    install_servicenow_incident_demo: false
+    install_servicenow_cmdb_demo: false
+    # Add appliance to satellite for the purpose of updating appliance and installing useful packages.
+    add_to_satellite: true
+    # Satellite URL, activation key, and org ID
+    satellite_url: "http://sat.example.com"
+    satellite_activation_key: "cf_demo"
+    satellite_org_id: "Default_Organization"
+    # Remove from Satellite after updating appliance
+    remove_from_satellite: true
+    # Fully update appliance (including CFME)
+    # NOTE: add_to_satellite must be true for update_appliance to work
+    update_appliance: true
+    # CFME repo name
+    cfme_repo: "cf-me-5.8-for-rhel-7-rpms"
+  tasks:
+  - name: Set root user password
+    user: name=root update_password=always password="{{ root_hash }}"
+  - name: Add to satellite
+    block:
+      - name: Unregister system from subscription-manager
+        redhat_subscription:
+          state: absent
+      - name: Remove any existing satellite CA certs
+        yum:
+          name: "katello-ca-consumer-*"
+          state: absent
+      - name: Install our satellite CA cert
+        yum:
+          name: "{{ satellite_url }}/pub/katello-ca-consumer-latest.noarch.rpm"
+          state: present
+      - name: Register with our satellite
+        redhat_subscription:
+          state: present
+          activationkey: "{{ satellite_activation_key }}"
+          org_id: "{{ satellite_org_id }}"
+      - name: Enable necessary repositories
+        command: "subscription-manager repos --enable {{ cfme_repo }} --enable rhel-server-rhscl-7-rpms --enable rhel-7-server-optional-rpms --enable rhel-7-server-rh-common-rpms --enable rhel-7-server-supplementary-rpms"
+      - name: Yum install git
+        yum: name=git state=latest
+      - name: Yum install tree
+        yum: name=tree state=latest
+      - name: Yum install wget
+        yum: name=wget state=latest
+      - name: Yum install VIM
+        yum: name=vim state=latest
+      - name: Yum update all packages (including cfme)
+        yum: name=* state=latest
+        when: update_appliance == true
+      - name: Unregister system from our satellite
+        redhat_subscription:
+          state: absent
+        when: remove_from_satellite == true
+      - name: Remove our satellite CA cert
+        yum:
+          name: "katello-ca-consumer-*"
+          state: absent
+        when: remove_from_satellite == true
+    when: add_to_satellite == true
+  - name: Create blank CloudForms database region
+    command: "/usr/bin/appliance_console_cli -r {{ cfme_region }} -i -h localhost -p '{{ db_password }}'"
+  - name: Stop evmserverd
+    command: "evmserver.sh stop"
+  - name: Download database dump
+    get_url:
+      url: "{{ database_dump_url }}"
+      dest: /root/vmdb_production_latest.dump
+      mode: 0440
+      timeout: 120
+  - name: Drop existing vmdb_production
+    shell: dropdb vmdb_production
+    args:
+      chdir: /root
+    ignore_errors: yes
+  - name: Create blank vmdb_production
+    shell: createdb vmdb_production
+    args:
+      chdir: /root
+  - name: Restore the dump - this will take a while
+    shell: pg_restore -vd vmdb_production vmdb_production_latest.dump
+    args:
+      chdir: /root
+  - name: Invalidate v2 encryption key
+    shell: bundle exec tools/fix_auth.rb --v2 --invalid bogus
+    args:
+      chdir: /var/www/miq/vmdb
+  - name: Set CFME admin user password
+    shell: bin/rails r "User.find_by_userid('admin').update_attributes(:password => '{{ admin_password }}')"
+    args:
+      chdir: /var/www/miq/vmdb
+  - name: Set CFME cloudops user password
+    shell: bin/rails r "User.find_by_userid('cloudops').update_attributes(:password => '{{ cloudops_password }}')"
+    args:
+      chdir: /var/www/miq/vmdb
+  - name: Set CFME clouduser user password
+    shell: bin/rails r "User.find_by_userid('clouduser').update_attributes(:password => '{{ clouduser_password }}')"
+    args:
+      chdir: /var/www/miq/vmdb
+  - name: Start evmserverd
+    service:
+      name: evmserverd
+      state: started
+  - name: Pause for evmserverd to start
+    pause: prompt="Please wait..." minutes=1
+  - name: Clone RHT consulting scripts from github
+    git:
+      repo: https://github.com/rhtconsulting/cfme-rhconsulting-scripts.git
+      dest: /root/cfme-rhconsulting-scripts
+  - name: Install RHT consulting scripts
+    shell: make install
+    args:
+      chdir: /root/cfme-rhconsulting-scripts
+      creates: /root/cfme-rhconsulting-scripts.txt
+  - name: Install CloudForms_Infoblox demo
+    block:
+      - name: Clone CloudForms_Infoblox from github
+        git:
+          repo: https://github.com/ramrexx/CloudForms_Infoblox.git
+          dest: /root/CloudForms_Infoblox
+      - name: Import the automate domain for CloudForms_Infoblox
+        shell: /usr/bin/miqimport domain CloudForms_Infoblox /root/CloudForms_Infoblox/automate/
+        args:
+          chdir: /root/CloudForms_Infoblox
+          creates: /root/CloudForms_Infoblox/ramrexx-CloudForms_Infoblox-import-automate-domain.txt
+    when: install_infoblox_demo == true
+  - name: Install CloudForms Essentials
+    block:
+      - name: Clone CloudForms_Essentials from github
+        git:
+          repo: https://github.com/ramrexx/CloudForms_Essentials.git
+          dest: /root/ramrexx-CloudForms_Essentials
+      - name: Import the automate domain for CloudForms_Essentials
+        shell: /usr/bin/miqimport domain CloudForms_Essentials /root/ramrexx-CloudForms_Essentials/automate/
+        args:
+          chdir: /root/ramrexx-CloudForms_Essentials
+          creates: /root/ramrexx-CloudForms_Essentials/ramrexx-CloudForms_Essentials-import-automate-domain.txt
+      - name: Import CloudForms_Essentials dialogs
+        shell: "miqimport service_dialogs service_dialogs/"
+        args:
+          chdir: /root/ramrexx-CloudForms_Essentials
+
+      - name: Import CloudForms_Essentials buttons
+        shell: "miqimport buttons buttons/"
+        args:
+         chdir: /root/ramrexx-CloudForms_Essentials
+
+      - name: Import CloudForms_Essentials alerts
+        shell: "miqimport alerts alerts/"
+        args:
+         chdir: /root/ramrexx-CloudForms_Essentials
+
+      - name: Import CloudForms_Essentials policies
+        shell: "miqimport policies policies/"
+        args:
+         chdir: /root/ramrexx-CloudForms_Essentials
+
+      - name: Import CloudForms_Essentials reports
+        shell: "miqimport reports reports/"
+        args:
+         chdir: /root/ramrexx-CloudForms_Essentials
+
+      - name: Import CloudForms_Essentials widgets
+        shell: "miqimport widgets widgets/"
+        args:
+         chdir: /root/ramrexx-CloudForms_Essentials
+    when: install_cloudforms_essentials == true and install_cloudforms_poc == false
+  - name: Install CloudForms POC
+    block:
+      - name: Clone CloudFormsPOC from github
+        git:
+          repo: https://github.com/ramrexx/CloudFormsPOC.git
+          dest: /root/ramrexx-CloudFormsPOC
+      - name: Import the automate domain for CloudFormsPOC
+        shell: /usr/bin/miqimport domain CloudFormsPOC /root/ramrexx-CloudFormsPOC/automate/
+        args:
+          chdir: /root/ramrexx-CloudFormsPOC
+          creates: /root/ramrexx-CloudFormsPOC/ramrexx-CloudFormsPOC-import-automate-domain.txt
+    when: install_cloudforms_poc == true and install_cloudforms_essentials == false
+  - name: Install ServiceNow_Incident Demo
+    block:
+      - name: Download Repo for ServiceNow_Incident
+        git:
+          repo: https://github.com/ramrexx/ServiceNow_Incident.git
+          dest: /root/ramrexx-ServiceNow_Incident
+      - name: Import the Automate Domain for ServiceNow_Incident
+        shell: /usr/bin/miqimport domain ServiceNow_Incident /root/ramrexx-ServiceNow_Incident/automate/
+        args:
+          chdir: /root/ramrexx-ServiceNow_Incident
+          creates: /root/ramrexx-ServiceNow_Incident/ramrexx-ServiceNow_Incident-import-automate-domain.txt
+      - name: Import the Service Dialogs for ServiceNow_Incident
+        shell: /usr/bin/miqimport service_dialogs /root/ramrexx-ServiceNow_Incident/service_dialogs/servicenow_incident_dialog.yml
+        args:
+          chdir: /root/ramrexx-ServiceNow_Incident
+          creates: /root/ramrexx-ServiceNow_Incident/ramrexx-ServiceNow_Incident-import-service-dialogs.txt
+      - name: Import the Custom Buttons for ServiceNow_Incident
+        shell: /usr/bin/miqimport buttons /root/ramrexx-ServiceNow_Incident/buttons/ServiceNow_IM_Vm_.yaml
+        args:
+          chdir: /root/ramrexx-ServiceNow_Incident
+          creates: /root/ramrexx-ServiceNow_Incident/ramrexx-ServiceNow_Incident-import-custom-buttons.txt
+      - name: Import the Widgets for ServiceNow_Incident
+        shell: /usr/bin/miqimport buttons /root/ramrexx-ServiceNow_Incident/buttons/ServiceNow_IM_Vm_.yaml
+        args:
+          chdir: /root/ServiceNow_Incident
+          creates: /root/ServiceNow_Incident/ramrexx-ServiceNow_Incident-import-custom-buttons.txt
+    when: install_servicenow_incident_demo == true
+  - name: Install ServiceNow_CMDB Demo
+    block:
+      - name: Clone ServiceNow_CMDB from github
+        git:
+          repo: https://github.com/ramrexx/ServiceNow_CMDB.git
+          dest: /root/ServiceNow_CMDB
+      - name: Import the Automate Domain for ServiceNow_CMDB
+        shell: /usr/bin/miqimport domain ServiceNow_CMDB /root/ServiceNow_CMDB/automate
+        args:
+          chdir: /root/ServiceNow_CMDB
+          creates: /root/ServiceNow_CMDB/ramrexx-ServiceNow_CMDB-import-automate-domain.txt
+      - name: Import the Custom Buttons for ServiceNow_CMDB
+        shell: /usr/bin/miqimport buttons /root/ServiceNow_CMDB/buttons/ServiceNow_CMDB_Vm_.yaml
+        args:
+          chdir: /root/ServiceNow_CMDB
+          creates: /root/ServiceNow_CMDB/ramrexx-ServiceNow_CMDB-import-custom-buttons.txt
+      - name: "Clone ServiceNow_ServiceCatalog from github"
+        git:
+          repo: https://github.com/ramrexx/ServiceNow_ServiceCatalog.git
+          dest: /root/ServiceNow_ServiceCatalog
+    when: install_servicenow_cmdb_demo == true

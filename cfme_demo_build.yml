@@ -21,10 +21,11 @@
     install_cloudforms_essentials: false
     # This should only be enabled for pre CloudForms 4.5 appliances
     install_cloudforms_poc: false
+    # One of these caused CloudForms 4.5 UI to bug out so YMMV
     install_servicenow_incident_demo: false
     install_servicenow_cmdb_demo: false
     # Add appliance to satellite for the purpose of updating appliance and installing useful packages.
-    add_to_satellite: true
+    add_to_satellite: false
     # Satellite URL, activation key, and org ID
     satellite_url: "http://sat.example.com"
     satellite_activation_key: "cf_demo"

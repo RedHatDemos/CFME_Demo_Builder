@@ -40,8 +40,7 @@
   tasks:
   - name: Set root user password
     user: name=root update_password=always password="{{ root_hash }}"
-  - name: Add to satellite
-    block:
+  - block:
       - name: Unregister system from subscription-manager
         redhat_subscription:
           state: absent
@@ -135,8 +134,7 @@
     args:
       chdir: /root/cfme-rhconsulting-scripts
       creates: /root/cfme-rhconsulting-scripts.txt
-  - name: Install CloudForms_Infoblox demo
-    block:
+  - block:
       - name: Clone CloudForms_Infoblox from github
         git:
           repo: https://github.com/ramrexx/CloudForms_Infoblox.git
@@ -147,8 +145,7 @@
           chdir: /root/CloudForms_Infoblox
           creates: /root/CloudForms_Infoblox/ramrexx-CloudForms_Infoblox-import-automate-domain.txt
     when: install_infoblox_demo == true
-  - name: Install CloudForms Essentials
-    block:
+  - block:
       - name: Clone CloudForms_Essentials from github
         git:
           repo: https://github.com/ramrexx/CloudForms_Essentials.git
@@ -188,8 +185,7 @@
         args:
          chdir: /root/ramrexx-CloudForms_Essentials
     when: install_cloudforms_essentials == true and install_cloudforms_poc == false
-  - name: Install CloudForms POC
-    block:
+  - block:
       - name: Clone CloudFormsPOC from github
         git:
           repo: https://github.com/ramrexx/CloudFormsPOC.git
@@ -200,8 +196,7 @@
           chdir: /root/ramrexx-CloudFormsPOC
           creates: /root/ramrexx-CloudFormsPOC/ramrexx-CloudFormsPOC-import-automate-domain.txt
     when: install_cloudforms_poc == true and install_cloudforms_essentials == false
-  - name: Install ServiceNow_Incident Demo
-    block:
+  - block:
       - name: Download Repo for ServiceNow_Incident
         git:
           repo: https://github.com/ramrexx/ServiceNow_Incident.git
@@ -227,8 +222,7 @@
           chdir: /root/ServiceNow_Incident
           creates: /root/ServiceNow_Incident/ramrexx-ServiceNow_Incident-import-custom-buttons.txt
     when: install_servicenow_incident_demo == true
-  - name: Install ServiceNow_CMDB Demo
-    block:
+  - block:
       - name: Clone ServiceNow_CMDB from github
         git:
           repo: https://github.com/ramrexx/ServiceNow_CMDB.git
